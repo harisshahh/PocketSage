@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+google-cloud-firestore
+google-genai
+plaid-python
+python-dotenv
+python-multipart
+itsdangerous
+starlette
