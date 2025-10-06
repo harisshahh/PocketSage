@@ -2,7 +2,7 @@ from google.cloud import firestore
 from .models import Transaction
 import os
 
-db = firestore.client(project=os.getenv('GCP_PROJECT_ID'))
+db = firestore.Client(project=os.getenv('GCP_PROJECT_ID'))
 
 TRANSACTIONS_COLLECTION = 'transactions'
 TOKENS_COLLECTION = 'plaid_tokens'
