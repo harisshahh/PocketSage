@@ -8,7 +8,7 @@ PocketSage is an **AI-powered personal finance assistant** that helps users trac
 
 ## Features
 - **Plaid API Integration** — securely connects to user bank accounts and fetches transaction data.  
-- **AI Insights** — generates spending summaries, budget tips, and alerts using OpenAI’s API.  
+- **AI Insights** — generates spending summaries, budget tips, and alerts using Gemini's API.  
 - **Smart Categorization** — automatically groups transactions into categories like food, utilities, and travel.  
 - **Secure Data Handling** — all user data is processed locally or securely encrypted in transit.  
 - **Scalable Architecture** — built with a modular backend for future expansion to mobile platforms.
@@ -16,6 +16,6 @@ PocketSage is an **AI-powered personal finance assistant** that helps users trac
 ---
 
 ## 🛠️ Tech Stack
-**Backend:** Node.js, Express, MongoDB, Plaid API, OpenAI API  
+**Backend:** Node.js, FastAPI, Firestore, Plaid API, Gemini API  
 **Frontend (in progress):** React + Tailwind CSS  
 **Other Tools:** dotenv, Axios, Postman for API testing
