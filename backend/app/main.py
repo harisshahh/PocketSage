@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from . import db
+from . import db, gemini_service
 from . models import Transaction, AdviceQuery, PlaidTokenExchangeResponse
 import os
 import json
@@ -18,6 +18,12 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 
+from plaid.model.webhook_verification_key_get_request import WebhookVerificationKeyGetRequest
+from plaid.model.plaid_error import PlaidError
+from plaid.model.transactions_get_request import TransactionsGetRequest
+from datetime import datetime, timedelta
+
+from starlette.concurrency import run_in_threadpool
 
 
 
@@ -26,6 +32,7 @@ PLAID_SECRET = os.getenv('PLAID_SECRET')
 PLAID_ENV = os.getenv('PLAID_ENV', 'sandbox')
 PLAID_PRODUCTS = [Products('transactions')]
 PLAID_COUNTRY_CODES = [CountryCode('US')]
+FULL_WEBHOOK_URL = os.getenv("FULL_WEBHOOK_URL", "")
 
 
 
@@ -37,7 +44,7 @@ def get_plaid_environment():
     else:
         return plaid.Environment.Sandbox
 
-
+'''
 configuration = plaid.Configuration(
     host = get_plaid_environment(),
     api_key = {
@@ -45,6 +52,15 @@ configuration = plaid.Configuration(
         'secret': PLAID_SECRET,
         'plaidVersion': '2020-09-14'
     }
+)
+'''
+configuration = plaid.Configuration(
+    host=plaid.Environment.Sandbox,
+    api_key={
+        'clientId': PLAID_CLIENT_ID,
+        'secret': PLAID_SECRET,
+    },
+    #plaid_version='2020-09-14',
 )
 
 
@@ -77,19 +93,24 @@ def read_root():
 @app.post("/transactions")
 async def create_new_transaction(transaction: Transaction):
     print(f"Received manual transaction: {transaction.name}")
-    result = await db.create_transaction(transaction)
+    result = await run_in_threadpool(db.create_transaction, transaction)
     return result
 
 @app.post("/plaid/create_link_token")
 async def create_link_token():
     try:
-        request = LinkTokenCreateRequest(
-            user = LinkTokenCreateRequestUser(client_user_id = 'user1'),
-            client_name = "PocketSage",
-            products = PLAID_PRODUCTS,
-            country_codes = PLAID_COUNTRY_CODES,
-            language = 'en'
-        )
+        request_body = {
+            "user": LinkTokenCreateRequestUser(client_user_id = 'user1'),
+            "client_name": "PocketSage",
+            "products": PLAID_PRODUCTS,
+            "country_codes": PLAID_COUNTRY_CODES,
+            "language": 'en',
+        }
+
+        if FULL_WEBHOOK_URL:
+            request_body['webhook'] = FULL_WEBHOOK_URL
+
+        request = LinkTokenCreateRequest(**request_body)
         response = plaid_client.link_token_create(request)
         return {'link_token': response.link_token}
     except ApiException as e:
@@ -110,7 +131,7 @@ async def set_access_token(exchange_request: PlaidTokenExchangeResponse):
         access_token = exchange_response.access_token
         item_id = exchange_response.item_id
 
-        await db.save_plaid_access_token(exchange_request.public_token, access_token, item_id)
+        await run_in_threadpool(db.save_plaid_access_token, exchange_request.public_token, access_token, item_id)
 
         return {
             'message': 'Token exchange successful and access token saved.',
@@ -126,10 +147,70 @@ async def set_access_token(exchange_request: PlaidTokenExchangeResponse):
     
 @app.get("/plaid/transactions")
 async def get_plaid_transactions():
-    return {"message": "Endpoint is ready for Plaid transaction fetching & NLP Analysis"}
+    access_token = await run_in_threadpool(db.get_plaid_access_token)
+
+    if not access_token:
+        raise HTTPException(status_code=500, detail="No linked account found. Please connect your bank.")
+    
+    try:
+        today = datetime.now()
+        thirty_days_ago = today - timedelta(days=30)
+
+        request = TransactionsGetRequest(
+            access_token = access_token,
+            start_date = thirty_days_ago.strftime('%Y-%m-%d'),
+            end_date = today.strftime('%Y-%m-%d')
+        )
+        response = await run_in_threadpool(plaid_client.transactions_get, request)
+        transactions = response.transactions
+
+        processed_transactions = []
+        for txn in transactions:
+            gemini_result = await run_in_threadpool(gemini_service.analyze_transaction_nlp, txn.name)
+
+            processed_txn = {
+                "amount": txn.amount,
+                "date": txn.date,
+                "name": txn.name,
+                "category_plaid": txn.category[0] if txn.category else 'Plaid Uncategorized', # Plaid's own category
+                "category_nlp": gemini_result['category'], # My NLP category
+                "plaid_id": txn.transaction_id
+            }
+            processed_transactions.append(processed_txn)
+        return {"message": "Transactions fetched and analyzed", "transactions": processed_transactions}
+    except ApiException as e:
+        error_response = json.loads(e.body)
+        print(f"Plaid API error fetching transactions: {error_response}")
+        raise HTTPException(status_code=500, detail= f"Plaid Transactions error: {error_response}")
+    except Exception as e:
+        print(f"General error fetching transactions: {e}")
+        raise HTTPException(status_code=500, detail= f"General error: {e}")
+
+        
 
 @app.post("/gemini/advice")
 async def get_advice(query: AdviceQuery):
-    return {"message": "Endpoint is ready for Gemini's financial advice"}
+    print(f"Received advice query: {query.query}")
+    result = await run_in_threadpool(gemini_service.get_investment_advice, query.query)
 
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+
+
+'''
+@app.post("/plaid/webhook")
+async def receive_plaid_webhook(webhook_data: dict):
+    webhook_type = webhook_data.get('webhook_type')
+    code = webhook_data.get('webhook_code')
+    item_id = webhook_data.get('item_id')
+
+    print(f"Received Plaid Webhook: Type={webhook_type}, Code={code}, Item={item_id} ")
+
+    if webhook_type == 'TRANSACTIONS' and code == 'INITIAL_UPDATE':
+        return {"status": "successful", "message": "Plaid webhook received and processing initiated"}
+    return {"status": "successful", "message": "Webhook received, no action taken"}
+
+'''
 
