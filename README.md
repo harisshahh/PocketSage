@@ -15,7 +15,7 @@ PocketSage is an **AI-powered personal finance assistant** that helps users trac
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 **Backend:** Node.js, FastAPI, Firestore, Plaid API, Gemini API  
 **Frontend (in progress):** React + Tailwind CSS  
 **Other Tools:** dotenv, Axios, Postman for API testing
